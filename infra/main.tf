@@ -30,7 +30,7 @@ variable "resource_group_name" {
 variable "storage_account_name" {
   description = "Globally unique name for the storage account"
   type        = string
-  default     = "examplestorageacctCG2026"
+  default     = "examplestorageacctcg2026"
 }
 
 resource "azurerm_resource_group" "main" {
