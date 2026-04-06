@@ -45,7 +45,6 @@ resource "azurerm_storage_account" "main" {
   account_tier             = "Standard"
   account_replication_type = "LRS"
 
-  allow_blob_public_access = false
 }
 
 output "resource_group_name" {
