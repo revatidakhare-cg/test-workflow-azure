@@ -66,8 +66,8 @@ Note the following values:
 
 1. Go to **Azure Portal → Microsoft Entra ID → App registrations**.
 2. Open the app you created (`github-oidc-terraform-sp`).
-3. Go to **Certificates & secrets → Federated credentials → Add credential**.
-4. Configure:
+3. Go to **Certificates & secrets → Federated credentials → Add credential**. (with enviernment - production)
+5. Configure:
    - **Federated credential scenario**: `GitHub Actions deploying Azure resources` (if available) or `Other issuer`.
    - **Issuer**: `https://token.actions.githubusercontent.com`
    - **Subject identifier** (for repository-level access on `main` branch):
