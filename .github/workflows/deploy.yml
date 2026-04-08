@@ -1,134 +1,172 @@
-name: CI-CD Azure Terraform
-
+name: CI-CD - Terraform on Azure
+ 
 on:
   push:
     branches:
       - main
+    paths:
+      - '.github/workflows/deploy.yml'
+      - 'infra/**'
+      - 'README.md'
   pull_request:
     branches:
       - main
-
+    paths:
+      - 'infra/**'
+ 
 permissions:
-  contents: read
   id-token: write
-
+  contents: read
+  pull-requests: write
+ 
 env:
-  TF_VERSION: 1.14.7
   TF_WORKING_DIR: infra
-
+  TF_VERSION: 1.14.7
+ 
 jobs:
-  validate:
+  terraform-validate:
     name: Terraform Validate
     runs-on: ubuntu-latest
     permissions:
+      id-token: write
       contents: read
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
-
+ 
       - name: Set up Terraform
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: 1.14.7
-
-      - name: Terraform Init
+ 
+      - name: Terraform Format Check
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: terraform fmt -check -recursive
+ 
+      - name: Terraform Init (Validation)
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: terraform init -backend=false
-
+ 
       - name: Terraform Validate
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: terraform validate
-
-  plan:
+ 
+  terraform-plan:
     name: Terraform Plan
-    needs: validate
+    needs: terraform-validate
     runs-on: ubuntu-latest
+    environment:
+      name: development
     permissions:
-      contents: read
       id-token: write
-    env:
-      ARM_USE_OIDC: true
-      ARM_USE_AZUREAD: true
+      contents: read
+      pull-requests: write
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Set up Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: 1.14.7
-
-      - name: Azure login (OIDC)
+ 
+      - name: Azure login via OIDC
         uses: azure/login@v2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
+ 
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.14.7
+ 
       - name: Terraform Init
         working-directory: ${{ env.TF_WORKING_DIR }}
         env:
-          ARM_USE_OIDC: ${{ env.ARM_USE_OIDC }}
-          ARM_USE_AZUREAD: ${{ env.ARM_USE_AZUREAD }}
+          ARM_USE_OIDC: true
+          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
         run: terraform init
-
+ 
       - name: Terraform Plan
         id: plan
         working-directory: ${{ env.TF_WORKING_DIR }}
         env:
-          ARM_USE_OIDC: ${{ env.ARM_USE_OIDC }}
-          ARM_USE_AZUREAD: ${{ env.ARM_USE_AZUREAD }}
+          ARM_USE_OIDC: true
+          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
         run: terraform plan -out=tfplan
-
+ 
+      - name: Show Terraform Plan
+        if: always()
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: terraform show -no-color tfplan
+ 
+      - name: Comment plan on PR
+        if: github.event_name == 'pull_request'
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          recreate: true
+          path: infra/plan_output.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+ 
+      - name: Save plan output
+        if: always()
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: terraform show -no-color tfplan > plan_output.txt
+ 
       - name: Upload plan artifact
         uses: actions/upload-artifact@v4
         with:
           name: tfplan
           path: infra/tfplan
-
-  apply:
+ 
+  terraform-apply:
     name: Terraform Apply
-    needs: plan
-    runs-on: ubuntu-latest
+    needs: terraform-plan
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    environment:
+      name: production
     permissions:
-      contents: read
       id-token: write
-    env:
-      ARM_USE_OIDC: true
-      ARM_USE_AZUREAD: true
+      contents: read
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Set up Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: 1.14.7
-
-      - name: Azure login (OIDC)
+ 
+      - name: Azure login via OIDC
         uses: azure/login@v2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
+ 
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.14.7
+ 
+      - name: Terraform Init
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        env:
+          ARM_USE_OIDC: true
+          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        run: terraform init
+ 
       - name: Download plan artifact
         uses: actions/download-artifact@v4
         with:
           name: tfplan
           path: infra
-
-      - name: Terraform Init
-        working-directory: ${{ env.TF_WORKING_DIR }}
-        env:
-          ARM_USE_OIDC: ${{ env.ARM_USE_OIDC }}
-          ARM_USE_AZUREAD: ${{ env.ARM_USE_AZUREAD }}
-        run: terraform init
-
+ 
       - name: Terraform Apply
         working-directory: ${{ env.TF_WORKING_DIR }}
         env:
-          ARM_USE_OIDC: ${{ env.ARM_USE_OIDC }}
-          ARM_USE_AZUREAD: ${{ env.ARM_USE_AZUREAD }}
+          ARM_USE_OIDC: true
+          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
         run: terraform apply -auto-approve tfplan
