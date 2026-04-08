@@ -7,6 +7,7 @@ This repository contains a production-grade CI/CD setup for deploying Azure infr
 - IaC: Terraform
 - Terraform version: 1.14.7
 - Default branch: `main`
+-
 
 ## Repository Structure
 
