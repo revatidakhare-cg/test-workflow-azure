@@ -26,7 +26,7 @@ This repository contains a production-grade CI/CD setup for deploying Azure infr
    - Terraform 1.14.7
    - Azure CLI (optional but recommended)
 
-## Azure OIDC Setup (Federated Credentials)
+## Azure OIDC Setup (Federated Credentials) added for environment
 
 The pipeline uses GitHub OIDC to authenticate to Azure without storing long-lived credentials.
 
