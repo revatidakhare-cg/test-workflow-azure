@@ -1,26 +1,35 @@
-name: CI/CD - Terraform on Azure
+name: CI/CD - Azure Terraform
 
 on:
   push:
-    branches: ["main"]
+    branches:
+      - main
+    paths:
+      - '.github/workflows/deploy.yml'
+      - 'infra/**'
+      - 'README.md'
   pull_request:
-    branches: ["main"]
+    branches:
+      - main
+    paths:
+      - 'infra/**'
 
 permissions:
   id-token: write
   contents: read
+  pull-requests: write
 
 env:
+  TF_VERSION: '1.15.3'
   TF_WORKING_DIR: infra
-  TF_VERSION: 1.14.8
 
 jobs:
   validate:
     name: Terraform Validate
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: ${{ env.TF_WORKING_DIR }}
+    permissions:
+      id-token: write
+      contents: read
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -28,31 +37,40 @@ jobs:
       - name: Set up Terraform
         uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: ${{ env.TF_VERSION }}
+          terraform_version: '${{ env.TF_VERSION }}'
 
-      - name: Terraform Format
-        run: terraform fmt -check -recursive
+      - name: Azure login via OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
       - name: Terraform Init
-        run: terraform init -backend=false
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: terraform init -input=false
 
       - name: Terraform Validate
+        working-directory: ${{ env.TF_WORKING_DIR }}
         run: terraform validate
 
   plan:
     name: Terraform Plan
     runs-on: ubuntu-latest
     needs: validate
-    environment: development
-    defaults:
-      run:
-        working-directory: ${{ env.TF_WORKING_DIR }}
+    if: github.event_name == 'pull_request'
     permissions:
       id-token: write
       contents: read
+      pull-requests: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '${{ env.TF_VERSION }}'
 
       - name: Azure login via OIDC
         uses: azure/login@v2
@@ -61,46 +79,51 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Set up Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: ${{ env.TF_VERSION }}
-
       - name: Terraform Init
-        run: terraform init
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: terraform init -input=false
 
       - name: Terraform Plan
-        run: terraform plan -out=tfplan
-
-      - name: Upload plan artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: terraform-plan
-          path: ${{ env.TF_WORKING_DIR }}/tfplan
-
-  apply:
-    name: Terraform Apply
-    runs-on: ubuntu-latest
-    needs: plan
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    environment:
-      name: production
-      url: ${{ steps.output_url.outputs.app_url || '' }}
-    defaults:
-      run:
+        id: plan
         working-directory: ${{ env.TF_WORKING_DIR }}
+        run: |
+          terraform plan -input=false -no-color -out=tfplan
+        continue-on-error: false
+
+      - name: Show Terraform Plan
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: terraform show -no-color tfplan
+
+      - name: Comment plan on PR
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: terraform-plan
+          message: |
+            Terraform plan for `${{ github.ref }}`:
+
+            ```
+            ${{ steps.plan.outputs.stdout }}
+            ```
+
+  deploy:
+    name: Terraform Apply (main branch)
+    runs-on: ubuntu-latest
+    needs: validate
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     permissions:
       id-token: write
       contents: read
+    environment:
+      name: production
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Download plan artifact
-        uses: actions/download-artifact@v4
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
         with:
-          name: terraform-plan
-          path: ${{ env.TF_WORKING_DIR }}
+          terraform_version: '${{ env.TF_VERSION }}'
 
       - name: Azure login via OIDC
         uses: azure/login@v2
@@ -109,24 +132,16 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Set up Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: ${{ env.TF_VERSION }}
-
       - name: Terraform Init
-        run: terraform init
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: terraform init -input=false
+
+      - name: Terraform Plan (for apply)
+        id: plan-apply
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: |
+          terraform plan -input=false -no-color -out=tfplan
 
       - name: Terraform Apply
-        run: terraform apply -auto-approve tfplan
-
-      - name: Output application URL
-        id: output_url
-        run: |
-          APP_URL=$(terraform output -raw example_app_url 2>/dev/null || echo "")
-          echo "app_url=$APP_URL" >> "$GITHUB_OUTPUT"
-          if [ -n "$APP_URL" ]; then
-            echo "Application URL: $APP_URL"
-          else
-            echo "No example_app_url output defined in Terraform."
-          fi
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: terraform apply -input=false -auto-approve tfplan
